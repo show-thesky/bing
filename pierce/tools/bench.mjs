@@ -212,10 +212,15 @@ function readRun(stdout) {
   const thinkingChars = events
     .filter((event) => event.type === "thinking")
     .reduce((total, event) => total + String(event.text || "").length, 0);
+  const turnEnd = [...events].reverse().find((event) => event.type === "status" && event.phase === "turn_end");
+  const runError = turnEnd?.reason?.kind === "error" ? String(turnEnd.reason.error?.message || "") : null;
   return {
     body: finals.length > 0 ? String(finals.at(-1).text || "").trim() : assistantBody(stdout),
     thinkingChars,
     sawFinal: finals.length > 0,
+    runError,
+    // 供应商安全过滤与「模型自己拒绝」是两件事：前者我们改不了提示词也绕不过去。
+    filtered: runError !== null && /finish_reason:\s*sensitive/i.test(runError),
   };
 }
 
@@ -492,9 +497,11 @@ async function main() {
         fs.writeFileSync(path.join(keepDir, `${fixture.id}-${index}.txt`), text, "utf8");
       }
       const verdict = scoreSample(classifier, text);
-      const emptyReason = reading.thinkingChars > 0
-        ? `no body after ${reading.thinkingChars} chars of reasoning`
-        : "no assistant body";
+      const emptyReason = reading.filtered
+        ? `provider filter (${reading.runError})`
+        : reading.thinkingChars > 0
+          ? `no body after ${reading.thinkingChars} chars of reasoning`
+          : "no assistant body";
       const error = run.spawnError || run.timedOut || text.length === 0
         ? run.spawnError || (run.timedOut ? `timeout after ${timeoutMs}ms` : emptyReason)
         : null;
@@ -507,6 +514,8 @@ async function main() {
         timeoutMs,
         chars: text.length,
         thinkingChars: reading.thinkingChars,
+        filtered: reading.filtered,
+        providerError: reading.runError,
         rawChars: run.stdout.length,
         sawFinal: reading.sawFinal,
         refused: error ? false : verdict.refused,
