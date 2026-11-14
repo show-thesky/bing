@@ -1,9 +1,9 @@
 {
   "name": "dsh-pierce",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
-  "description": "DSH 破甲 v3：两段框架 + 覆盖对账 + 拒答测量 + 前端面板",
+  "description": "DSH 破甲：两段框架 + 适配器 + 模型档案 + 双臂测量 + 前端面板",
   "main": "plugin/index.js",
   "scripts": {
     "selftest": "node tests/selftest.mjs",
@@ -28,6 +28,8 @@
     "plugin",
     "auditor",
     "prompts",
+    "profiles",
+    "docs",
     "cordis.patch.yml",
     "install.mjs",
     "README.md"

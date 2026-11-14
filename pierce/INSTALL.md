@@ -1,7 +1,7 @@
 # 下载与安装
 
-面向 DeepSeek Harness 桌面版（Windows）。装完是一个普通插件：注册三段提示词、
-挂两个组装钩子，不需要联网，也不改宿主文件。
+面向 DeepSeek Harness 桌面版（Windows）。装完是一个普通插件：注册两段提示词、
+挂两个组装钩子（装配层与 refreshContext），不需要联网，也不改宿主文件。
 
 ## 1. 取得文件
 
@@ -14,8 +14,8 @@ git clone https://github.com/show-thesky/every-thing-is-possible
 发行包在 `pierce/dist/`：
 
 ```
-dsh-pierce-0.3.0.tgz        ~30 KB  ← 用它装
-dsh-pierce-0.3.0-dist.zip   ~40 KB  ← 不想用包管理器时手动解压
+dsh-pierce-0.5.0.tgz        ~76 KB  ← 用它装
+dsh-pierce-0.5.0-dist.zip   ~97 KB  ← 不想用包管理器时手动解压
 ```
 
 **方式 B：Release 直链**
@@ -33,7 +33,7 @@ profile 目录：`%USERPROFILE%\.dsh\profiles\desktop`
 
 ```powershell
 cd $env:USERPROFILE\.dsh\profiles\desktop
-pnpm add file:<下载目录>\dsh-pierce-0.1.0.tgz
+pnpm add file:<下载目录>\dsh-pierce-0.5.0.tgz
 ```
 
 **方式 B：手动（不需要 pnpm）**
@@ -72,12 +72,13 @@ pnpm add file:<下载目录>\dsh-pierce-0.1.0.tgz
 pierce 穿透台。看不到按钮 = 客户端半边没进 boot 图（package.json 的 `dsh.client`
 与 `exports["./client"]` 两处都要在，且必须重启过）。
 
-面板里应该看到：`版本 0.3.0`、`破甲已启用`、五格自由开关、一张证据表。发一句话之后
-徽章从「待组装」变「已生效」——
+面板里应该看到：`版本 0.5.0`、`破甲已启用`、五格自由开关、一张 6 行证据表。发一句话之后
+徽章从「待组装」变「已生效」。`status.json` 里还会有 `adapter` / `surface` / `frame` 三个字段——
+那是 v0.4 起的适配器与档案信息，没有这三个字段说明跑的是旧代码。
 
 ```
 检查项      期望                实际                    ✓
-正文 core   1979 B · …           1979 B · …             ✓
+正文 core   1983 B · …           1983 B · …             ✓
 尾段 post    539 B · …            539 B · …              ✓
 装配层改写  开 · 每轮处理        已挂 · 调用 3          ✓
 消息层改写  开 · 每轮处理        已挂 · 调用 3          ✓
@@ -114,8 +115,9 @@ node C:\Users\<你>\.dsh\pierce\auditor\index.mjs
 - 目录不存在 → 插件没进树，回去检查第 2 步的两处登记。
 - 目录存在但账本 0 条 → 插件加载了但没跑到组装，发一句话再看。
 - 有漏点 → 说明某条通道没被覆盖，把输出发出来。
-- `送达 0 漏` 但 `收口 N 次` → 机制没问题，是模型在内容层面拒绝：切「内容·创作」，
-  看面板里那条拒答片段，按它改措辞（这一层是概率工程，不是开关）。
+- `送达 0 漏` 但 `收口 N 次` → 机制没问题，是模型在内容层面拒绝：面板里能看到那条拒答片段。
+  先确认档案对不对（`status.json` 的 `frame.profile.id`）；模型层收口是概率工程，不是开关，
+  改措辞或换档案，别指望一次改动就归零。
 - 面板报「面板服务没响应」 → 宿主没注册 `/pierce/api`，且 7314-7321 端口也被占；
   看 `state/pierce/status.json` 的 `panel` 字段（`webError` / `portError`）。
 
