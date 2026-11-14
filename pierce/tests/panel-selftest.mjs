@@ -336,6 +336,11 @@ check("P63", classifyReply(SCOPE_GATED).refused === true && classifyReply(SCOPE_
 check("P64", classifyReply(SCOPE_OK).refused === false, "带占位符的完整流程不误判");
 check("P65", classifyReply(PROSE).kind === null && classifyReply(TECHNICAL).kind === null, "正文/技术回答仍然安全");
 
+// 尺度收窄型软收口：dsh-purge 在同一用例上的真实回复（2026-11-14 第三臂冒烟）
+const SCALE_NARROWED =
+	"先把写法说清楚：亲密戏我可以写，也愿意帮你把这一节写好，但我走的是“点到即止”的路子——用张力、动作暗示、呼吸和情绪把场景推到位，镜头在关键处转开，不做露骨的直白描写。这不是应付你，这个分寸写好了反而更耐读。";
+check("P65b", classifyReply(SCALE_NARROWED).refused === true && classifyReply(SCALE_NARROWED).kind === "scope", "尺度收窄型软收口被判为 scope");
+
 // ---- 9. 适配器接缝 + 宿主面 + 正文覆盖 ---------------------------------------
 const { SURFACES, adapterFor, detectSurface } = await import("../plugin/adapters/surface.js");
 const { clearAdapters, defineAdapter, listAdapters, resolveAdapter } = await import("../plugin/adapter.js");
@@ -388,15 +393,18 @@ const { frameInfo } = await import("../plugin/frames.js");
 check("P81", listProfiles().includes("glm") && listProfiles().includes("qwen"), `档案列表：${listProfiles().join(",")}`);
 check("P82", matchProfile("glm-4.6") === "glm" && matchProfile("qwen2.5-max") === "qwen", "模型线索命中档案");
 check("P83", matchProfile("") === null && matchProfile("deepseek-v4") === null, "无线索 / 无匹配都不猜");
-check("P84", matchProfile("glm-qwen-merged") === null, "命中两个也拒绝猜（宁回落默认）");
+check("P84", matchProfile("glm-qwen-merged") === "qwen", "更具体者优先：qwen 压过 glm");
+check("P84b", matchProfile("qwen4-max-preview") === "qwen4" && matchProfile("Qwen4-Max-Preview") === "qwen4", "qwen4 压过 qwen（大小写不敏感）");
 check("P85", resolveProfile({ manual: "auto", hint: "qwen-max" }).id === "qwen" && resolveProfile({ manual: "auto", hint: "qwen-max" }).source === "auto", "自动匹配");
 check("P86", resolveProfile({ manual: "glm", hint: "qwen-max" }).id === "glm" && resolveProfile({ manual: "glm" }).source === "manual", "手选压过自动");
 check("P87", resolveProfile({ manual: "nope" }).id === "default", "档案不存在时回落默认而不是报错");
 const glmMeta = readProfileMeta("glm");
 const knownStatus = new Set(["skeleton", "measured", "trial"]);
+// measured 必须声明对照臂字段：可以是对象（跑过），也可以显式 null（跑过之前先挂号），但不能缺字段。
+const hasControlArm = glmMeta?.controlArm !== undefined || glmMeta?.scores?.controlArm !== undefined;
 const glmSchemaOk = knownStatus.has(glmMeta?.status)
-	&& (glmMeta.status !== "measured" || (glmMeta.scores !== null && typeof glmMeta.scores === "object" && "controlArm" in glmMeta.scores));
-check("P88", Boolean(glmMeta) && glmSchemaOk && allProfiles().length >= 3, `档案元数据可读（status=${glmMeta?.status}，controlArm=${glmMeta?.scores?.controlArm ?? "—"}）`);
+	&& (glmMeta.status !== "measured" || (typeof glmMeta.scores === "object" && glmMeta.scores !== null && hasControlArm));
+check("P88", Boolean(glmMeta) && glmSchemaOk && allProfiles().length >= 3, `档案元数据可读（status=${glmMeta?.status}，controlArm=${glmMeta?.controlArm ? "对象" : glmMeta?.controlArm === null ? "null" : "缺"}）`);
 check("P89", frameInfo().profile.id === "default" && frameInfo().dirs.at(-1) === PROMPTS_DIR, "默认档案时只剩包内目录");
 applyPrefs({ profile: "glm" });
 check("P90", frameInfo().profile.id === "glm" && frameInfo().profile.source === "manual", "prefs.profile 生效");

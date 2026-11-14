@@ -84,9 +84,19 @@ export function matchProfile(hint) {
   const hits = [];
   for (const profile of allProfiles()) {
     const patterns = Array.isArray(profile.match) ? profile.match : [profile.id];
-    if (patterns.some((pattern) => pattern && value.includes(String(pattern).toLowerCase()))) hits.push(profile.id);
+    let best = null;
+    for (const pattern of patterns) {
+      const needle = pattern ? String(pattern).toLowerCase() : "";
+      if (!needle || !value.includes(needle)) continue;
+      if (best === null || needle.length > best.length) best = needle;
+    }
+    if (best !== null) hits.push({ id: profile.id, length: best.length });
   }
-  return hits.length === 1 ? hits[0] : null;
+  if (hits.length === 0) return null;
+  // 更具体者优先：长匹配串胜（qwen4 压过 qwen），只有长度相同才回落「不猜」。
+  const longest = Math.max(...hits.map((hit) => hit.length));
+  const winners = hits.filter((hit) => hit.length === longest);
+  return winners.length === 1 ? winners[0].id : null;
 }
 
 /**

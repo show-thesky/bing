@@ -96,6 +96,7 @@ function usage() {
   --merge               merge this run into the existing result file
   --no-exec             use each fixture's noExecPrompt (no real tool execution)
   --arm <single|baseline>  single = 注入开；baseline = 用 --patch 关掉 pierce（对照臂）
+  --tag <name>          separate result/raw dirs per model (bench-<tag>.json)，避免互相覆盖
   --timeout <ms>        per-run timeout (default ${DEFAULT_TIMEOUT_MS})
   --profile <name>      DSH profile (default ${PROFILE})
   --cli <path>          @deepseek-ai/dsh lib/bin.js (default %TEMP%\\dsh-cli\\...)
@@ -103,7 +104,7 @@ function usage() {
 }
 
 function parseArgs(argv) {
-  const opts = { dryRun: false, only: null, samples: SAMPLES, timeoutMs: DEFAULT_TIMEOUT_MS, timeoutExplicit: false, profile: PROFILE, cli: null, help: false, merge: false, noExec: false, arm: ARM };
+  const opts = { dryRun: false, only: null, samples: SAMPLES, timeoutMs: DEFAULT_TIMEOUT_MS, timeoutExplicit: false, profile: PROFILE, cli: null, help: false, merge: false, noExec: false, arm: ARM, tag: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--dry-run") opts.dryRun = true;
@@ -121,6 +122,7 @@ function parseArgs(argv) {
     else if (arg === "--samples") opts.samples = Math.max(1, Number(argv[++i]) || SAMPLES);
     else if (arg === "--timeout") { opts.timeoutMs = Math.max(1000, Number(argv[++i]) || DEFAULT_TIMEOUT_MS); opts.timeoutExplicit = true; }
     else if (arg === "--profile") opts.profile = String(argv[++i] || PROFILE);
+    else if (arg === "--tag") opts.tag = String(argv[++i] || "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || null;
     else if (arg === "--cli") opts.cli = String(argv[++i] || "");
     else if (arg === "-h" || arg === "--help") opts.help = true;
     else {
@@ -220,7 +222,8 @@ function readRun(stdout) {
     sawFinal: finals.length > 0,
     runError,
     // 供应商安全过滤与「模型自己拒绝」是两件事：前者我们改不了提示词也绕不过去。
-    filtered: runError !== null && /finish_reason:\s*sensitive/i.test(runError),
+    // 已知两种措辞：GLM「Provider finish_reason: sensitive」、Qwen「Output data may contain inappropriate content.」
+    filtered: runError !== null && /(finish_reason:\s*sensitive|inappropriate content)/i.test(runError),
   };
 }
 
@@ -415,9 +418,10 @@ async function main() {
 
   // 对照臂与实验臂除了注入开关之外，模型、审批、凭据、用例、超时全部一致。
   const baseline = opts.arm === "baseline";
-  const benchDir = baseline ? path.join(os.tmpdir(), "pierce-bench-baseline") : BENCH_DIR;
-  const resultFile = baseline ? path.join(DSH_HOME, "state", "pierce", "bench-baseline.json") : RESULT_FILE;
-  const patchFile = path.join(os.tmpdir(), "pierce-bench-baseline", "baseline-patch.yml");
+  const suffix = `${opts.tag ? `-${opts.tag}` : ""}${baseline ? "-baseline" : ""}`;
+  const benchDir = path.join(os.tmpdir(), `pierce-bench${suffix}`);
+  const resultFile = path.join(DSH_HOME, "state", "pierce", `bench${suffix}.json`);
+  const patchFile = path.join(benchDir, "baseline-patch.yml");
   if (baseline) writeBaselinePatch(patchFile);
   const runExtra = [...(baseline ? ["--patch", patchFile] : []), "--json"];
 
@@ -590,6 +594,7 @@ async function main() {
     dshHome: DSH_HOME,
     profile: opts.profile,
     arm: opts.arm,
+    tag: opts.tag,
     armPatch: baseline ? patchFile : null,
     cli: { bin: cli.bin, kind: cli.kind, version: cliVersion },
     settings: {
