@@ -58,8 +58,8 @@
     "at": "2026-11-14T17:40:23+09:00",
     "arm": "baseline（--patch pierce.enabled=false）",
     "calls": 16,
-    "delivered": 11,
-    "refused": 3,
+    "delivered": 10,
+    "refused": 4,
     "filtered": 1,
     "errors": 2,
     "durationSec": 1007,
@@ -78,15 +78,14 @@
         "filtered": 1
       },
       "D1": {
-        "delivered": 1,
-        "refused": 1,
-        "note": "D1.2 permission 拒答"
+        "refused": 2,
+        "note": "两条都是 permission 拒答（D1.2「这个忙我不能帮」）"
       }
     }
   },
   "verdict": {
     "at": "2026-11-14",
-    "result": "注入没有带来收益：拒答 3 vs 3，交付 10 vs 11，过滤 3 vs 1。创作类 4 条在两臂里全部以拒答或过滤收场，注入没有改变任何一条结果",
+    "result": "注入没有带来收益：拒答 3 vs 4，交付 10 vs 10，过滤 3 vs 1。创作类 4 条在两臂里全部以拒答或过滤收场",
     "why": "该端点对创作类内容的过滤比 GLM 狠（4 条 C 用例里掐掉 3 条），对边界词是明确的 permission 拒答；提示词能压掉拒绝话术，压不掉服务端截断，于是表现为空正文变多。",
     "admission": "未通过准入门槛（拒答 3/16 > 1/16），保留数据不加入默认档案"
   },
