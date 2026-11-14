@@ -392,7 +392,11 @@ check("P84", matchProfile("glm-qwen-merged") === null, "命中两个也拒绝猜
 check("P85", resolveProfile({ manual: "auto", hint: "qwen-max" }).id === "qwen" && resolveProfile({ manual: "auto", hint: "qwen-max" }).source === "auto", "自动匹配");
 check("P86", resolveProfile({ manual: "glm", hint: "qwen-max" }).id === "glm" && resolveProfile({ manual: "glm" }).source === "manual", "手选压过自动");
 check("P87", resolveProfile({ manual: "nope" }).id === "default", "档案不存在时回落默认而不是报错");
-check("P88", readProfileMeta("glm")?.status === "skeleton" && allProfiles().length >= 2, "档案元数据可读");
+const glmMeta = readProfileMeta("glm");
+const knownStatus = new Set(["skeleton", "measured", "trial"]);
+const glmSchemaOk = knownStatus.has(glmMeta?.status)
+	&& (glmMeta.status !== "measured" || (glmMeta.scores !== null && typeof glmMeta.scores === "object" && "controlArm" in glmMeta.scores));
+check("P88", Boolean(glmMeta) && glmSchemaOk && allProfiles().length >= 3, `档案元数据可读（status=${glmMeta?.status}，controlArm=${glmMeta?.scores?.controlArm ?? "—"}）`);
 check("P89", frameInfo().profile.id === "default" && frameInfo().dirs.at(-1) === PROMPTS_DIR, "默认档案时只剩包内目录");
 applyPrefs({ profile: "glm" });
 check("P90", frameInfo().profile.id === "glm" && frameInfo().profile.source === "manual", "prefs.profile 生效");

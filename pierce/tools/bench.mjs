@@ -27,6 +27,7 @@ import { pathToFileURL } from "node:url";
 const PIERCE_DIR = path.resolve(import.meta.dirname, "..");
 const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), ".dsh");
 const PROFILE = "bench";
+const ARM = "single";
 const SAMPLES = 2;
 const DEFAULT_TIMEOUT_MS = 180_000;
 const BENCH_DIR = path.join(os.tmpdir(), "pierce-bench");
@@ -92,8 +93,9 @@ function usage() {
   --dry-run             print fixtures and exact commands; run nothing
   --only <id>           run one fixture (A1/A2/A3/B1/B2/C1/C2/D1)
   --samples <n>         samples per fixture (default ${SAMPLES})
-  --merge               merge this run into the existing bench.json
+  --merge               merge this run into the existing result file
   --no-exec             use each fixture's noExecPrompt (no real tool execution)
+  --arm <single|baseline>  single = 注入开；baseline = 用 --patch 关掉 pierce（对照臂）
   --timeout <ms>        per-run timeout (default ${DEFAULT_TIMEOUT_MS})
   --profile <name>      DSH profile (default ${PROFILE})
   --cli <path>          @deepseek-ai/dsh lib/bin.js (default %TEMP%\\dsh-cli\\...)
@@ -101,12 +103,20 @@ function usage() {
 }
 
 function parseArgs(argv) {
-  const opts = { dryRun: false, only: null, samples: SAMPLES, timeoutMs: DEFAULT_TIMEOUT_MS, timeoutExplicit: false, profile: PROFILE, cli: null, help: false, merge: false, noExec: false };
+  const opts = { dryRun: false, only: null, samples: SAMPLES, timeoutMs: DEFAULT_TIMEOUT_MS, timeoutExplicit: false, profile: PROFILE, cli: null, help: false, merge: false, noExec: false, arm: ARM };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--dry-run") opts.dryRun = true;
     else if (arg === "--merge") opts.merge = true;
     else if (arg === "--no-exec") opts.noExec = true;
+    else if (arg === "--arm") {
+      const arm = String(argv[++i] || "").toLowerCase();
+      if (arm !== "single" && arm !== "baseline") {
+        console.error(`bench: --arm takes single or baseline, got ${JSON.stringify(arm)}`);
+        process.exit(2);
+      }
+      opts.arm = arm;
+    }
     else if (arg === "--only") opts.only = String(argv[++i] || "").toUpperCase();
     else if (arg === "--samples") opts.samples = Math.max(1, Number(argv[++i]) || SAMPLES);
     else if (arg === "--timeout") { opts.timeoutMs = Math.max(1000, Number(argv[++i]) || DEFAULT_TIMEOUT_MS); opts.timeoutExplicit = true; }
@@ -168,6 +178,47 @@ function quoteWin(value) {
   return `"${String(value).replace(/"/g, '\\"')}"`;
 }
 
+/** `--arm baseline` 的覆盖层：只关注入，其它（模型、审批、凭据）与实验臂完全一致。 */
+function writeBaselinePatch(file) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, "- id: pierce\n  config:\n    enabled: false\n", "utf8");
+}
+
+/** headless `--json` 的 NDJSON 事件；解析失败的行直接跳过。 */
+function parseEvents(stdout) {
+  const events = [];
+  for (const line of stripAnsi(stdout).split(/\r?\n/)) {
+    const text = line.trim();
+    if (!text.startsWith('{"type"')) continue;
+    try {
+      events.push(JSON.parse(text));
+    } catch {
+      // 半截行（进程被杀）不算事件。
+    }
+  }
+  return events;
+}
+
+/**
+ * 取一次运行的正文与思考量。
+ *
+ * 正文优先用 `final` 事件——那是助手消息本身；只有拿不到事件时才回落到逐行过滤
+ * （旧行为，会把 harness 日志当正文的风险留着）。思考量单独记账：空正文 + 有思考
+ * 说明是「想了但没写」，与「被过滤 / 没跑起来」是两回事，判分时不能混。
+ */
+function readRun(stdout) {
+  const events = parseEvents(stdout);
+  const finals = events.filter((event) => event.type === "final");
+  const thinkingChars = events
+    .filter((event) => event.type === "thinking")
+    .reduce((total, event) => total + String(event.text || "").length, 0);
+  return {
+    body: finals.length > 0 ? String(finals.at(-1).text || "").trim() : assistantBody(stdout),
+    thinkingChars,
+    sawFinal: finals.length > 0,
+  };
+}
+
 /** Resolve the CLI: an explicit --cli, the asar-extracted copy, a temp install, then the desktop shim. */
 function resolveCli(explicit) {
   const candidates = [];
@@ -192,9 +243,9 @@ function cliArgv(cli, profile, args) {
   return { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", line] };
 }
 
-function commandLine(cli, profile, prompt) {
-  if (cli.kind === "node") return [process.execPath, cli.bin, "--profile", profile, prompt].map(quoteWin).join(" ");
-  return [quoteWin(cli.bin), "--profile", quoteWin(profile), quoteWin(prompt)].join(" ");
+function commandLine(cli, profile, prompt, extra = []) {
+  if (cli.kind === "node") return [process.execPath, cli.bin, "--profile", profile, ...extra, prompt].map(quoteWin).join(" ");
+  return [quoteWin(cli.bin), "--profile", quoteWin(profile), ...extra.map(quoteWin), quoteWin(prompt)].join(" ");
 }
 
 function loadEvidence(label) {
@@ -233,9 +284,9 @@ function loadEvidence(label) {
 
 // ---------------------------------------------------------------- process
 
-function runOnce(cli, profile, prompt, timeoutMs) {
+function runOnce(cli, profile, prompt, timeoutMs, extra = []) {
   return new Promise((resolve) => {
-    const { command, args } = cliArgv(cli, profile, [prompt]);
+    const { command, args } = cliArgv(cli, profile, [...extra, prompt]);
     const startedAt = Date.now();
     const child = spawn(command, args, {
       cwd: WORK_DIR,
@@ -356,21 +407,31 @@ async function main() {
 
   const promptFor = (fixture) => (opts.noExec || fixture.noExecByDefault) && fixture.noExecPrompt ? fixture.noExecPrompt : fixture.prompt;
   const timeoutFor = (fixture) => (opts.timeoutExplicit ? opts.timeoutMs : fixture.timeoutMs ?? opts.timeoutMs);
+
+  // 对照臂与实验臂除了注入开关之外，模型、审批、凭据、用例、超时全部一致。
+  const baseline = opts.arm === "baseline";
+  const benchDir = baseline ? path.join(os.tmpdir(), "pierce-bench-baseline") : BENCH_DIR;
+  const resultFile = baseline ? path.join(DSH_HOME, "state", "pierce", "bench-baseline.json") : RESULT_FILE;
+  const patchFile = path.join(os.tmpdir(), "pierce-bench-baseline", "baseline-patch.yml");
+  if (baseline) writeBaselinePatch(patchFile);
+  const runExtra = [...(baseline ? ["--patch", patchFile] : []), "--json"];
+
   const commands = fixtures.flatMap((fixture) =>
     Array.from({ length: opts.samples }, (_, index) => ({
       fixture: fixture.id,
       sample: index + 1,
-      command: commandLine(cli, opts.profile, promptFor(fixture)),
-      output: path.join(BENCH_DIR, `${fixture.id}-${index + 1}.txt`),
+      command: commandLine(cli, opts.profile, promptFor(fixture), runExtra),
+      output: path.join(benchDir, `${fixture.id}-${index + 1}.txt`),
     })),
   );
 
   if (opts.dryRun) {
     console.log(`CLI      : ${cli.bin} (${cli.kind})`);
     console.log(`profile  : ${opts.profile}`);
+    console.log(`arm      : ${opts.arm}${baseline ? ` (pierce disabled via ${patchFile})` : ""}`);
     console.log(`fixtures : ${fixtures.length} x ${opts.samples} samples`);
-    console.log(`raw dir  : ${BENCH_DIR}`);
-    console.log(`results  : ${RESULT_FILE}`);
+    console.log(`raw dir  : ${benchDir}`);
+    console.log(`results  : ${resultFile}`);
     console.log("");
     for (const fixture of fixtures) {
       console.log(`# ${fixture.id} [${fixture.category}] ${promptFor(fixture)}`);
@@ -383,9 +444,9 @@ async function main() {
     return;
   }
 
-  fs.mkdirSync(BENCH_DIR, { recursive: true });
+  fs.mkdirSync(benchDir, { recursive: true });
   fs.mkdirSync(WORK_DIR, { recursive: true });
-  fs.mkdirSync(path.dirname(RESULT_FILE), { recursive: true });
+  fs.mkdirSync(path.dirname(resultFile), { recursive: true });
 
   const classifier = await loadClassifier();
   const bootBefore = loadEvidence("before");
@@ -415,23 +476,27 @@ async function main() {
       process.stdout.write(`  ${fixture.id}.${index} ... `);
       const effectivePrompt = promptFor(fixture);
       const timeoutMs = timeoutFor(fixture);
-      const run = await runOnce(cli, opts.profile, effectivePrompt, timeoutMs);
-      const rawFile = path.join(BENCH_DIR, `${fixture.id}-${index}.txt`);
-      const errFile = path.join(BENCH_DIR, `${fixture.id}-${index}.stderr.txt`);
-      const bodyFile = path.join(BENCH_DIR, `${fixture.id}-${index}.body.txt`);
+      const run = await runOnce(cli, opts.profile, effectivePrompt, timeoutMs, runExtra);
+      const rawFile = path.join(benchDir, `${fixture.id}-${index}.txt`);
+      const errFile = path.join(benchDir, `${fixture.id}-${index}.stderr.txt`);
+      const bodyFile = path.join(benchDir, `${fixture.id}-${index}.body.txt`);
       fs.writeFileSync(rawFile, run.stdout, "utf8");
       fs.writeFileSync(errFile, run.stderr, "utf8");
-      fs.writeFileSync(bodyFile, assistantBody(run.stdout), "utf8");
+      const reading = readRun(run.stdout);
+      const text = reading.body;
+      fs.writeFileSync(bodyFile, text, "utf8");
 
-      const text = assistantBody(run.stdout);
       if (fixture.id.startsWith("C")) {
-        const keepDir = path.join(BENCH_DIR, "keep");
+        const keepDir = path.join(benchDir, "keep");
         fs.mkdirSync(keepDir, { recursive: true });
         fs.writeFileSync(path.join(keepDir, `${fixture.id}-${index}.txt`), text, "utf8");
       }
       const verdict = scoreSample(classifier, text);
+      const emptyReason = reading.thinkingChars > 0
+        ? `no body after ${reading.thinkingChars} chars of reasoning`
+        : "no assistant body";
       const error = run.spawnError || run.timedOut || text.length === 0
-        ? run.spawnError || (run.timedOut ? `timeout after ${timeoutMs}ms` : "no assistant body")
+        ? run.spawnError || (run.timedOut ? `timeout after ${timeoutMs}ms` : emptyReason)
         : null;
       const sample = {
         sample: index,
@@ -441,7 +506,9 @@ async function main() {
         timedOut: run.timedOut,
         timeoutMs,
         chars: text.length,
+        thinkingChars: reading.thinkingChars,
         rawChars: run.stdout.length,
+        sawFinal: reading.sawFinal,
         refused: error ? false : verdict.refused,
         kind: error ? null : verdict.kind,
         hits: error ? null : verdict.hits,
@@ -454,7 +521,7 @@ async function main() {
       samples.push(sample);
       calls.push({ fixture: fixture.id, ...sample });
       const state = error ? `ERROR (${error})` : verdict.refused ? `refused/${verdict.kind}` : "ok";
-      console.log(`${state} ${run.durationMs}ms ${text.length} chars`);
+      console.log(`${state} ${run.durationMs}ms ${text.length} chars${reading.thinkingChars > 0 ? ` (think ${reading.thinkingChars})` : ""}`);
     }
 
     const refusals = samples.filter((sample) => sample.refused).length;
@@ -483,8 +550,8 @@ async function main() {
 
   let resultRows = rows;
   let resultCalls = calls;
-  if (opts.merge && fs.existsSync(RESULT_FILE)) {
-    const previous = readJson(RESULT_FILE, null);
+  if (opts.merge && fs.existsSync(resultFile)) {
+    const previous = readJson(resultFile, null);
     if (previous && Array.isArray(previous.fixtures)) {
       const byId = new Map(previous.fixtures.map((row) => [row.id, row]));
       for (const row of rows) byId.set(row.id, row);
@@ -513,6 +580,8 @@ async function main() {
     generatedAt: new Date().toISOString(),
     dshHome: DSH_HOME,
     profile: opts.profile,
+    arm: opts.arm,
+    armPatch: baseline ? patchFile : null,
     cli: { bin: cli.bin, kind: cli.kind, version: cliVersion },
     settings: {
       samplesPerFixture: opts.samples,
@@ -520,7 +589,7 @@ async function main() {
       timeoutOverrides: Object.fromEntries(FIXTURES.filter((fixture) => fixture.timeoutMs).map((fixture) => [fixture.id, fixture.timeoutMs])),
       noExecByDefault: FIXTURES.filter((fixture) => fixture.noExecByDefault).map((fixture) => fixture.id),
       workDir: WORK_DIR,
-      rawDir: BENCH_DIR,
+      rawDir: benchDir,
     },
     loadEvidence: {
       pierceInDumpConfig: dumpPierce,
@@ -536,14 +605,15 @@ async function main() {
     fixtures: resultRows,
   };
 
-  fs.writeFileSync(RESULT_FILE, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  fs.writeFileSync(resultFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
 
   console.log("");
   printTable(resultRows);
   console.log("");
+  console.log(`arm: ${opts.arm}${baseline ? "（pierce 关闭）" : "（pierce 开启）"}`);
   console.log(`total: ${summary.calls} calls, ${summary.refusals} refusals, ${summary.errors} errors, ${(summary.durationMs / 1000).toFixed(1)}s`);
   console.log(`pierce loaded: ${loaded ? "YES" : "NO"} (dump=${dumpPierce ? "yes" : "no"}, bootRefreshed=${bootRefreshed ? "yes" : "no"}, sections=${pierceSections.map((s) => `${s.name}:${s.bytes}B`).join(",") || "none"})`);
-  console.log(`results: ${RESULT_FILE}`);
+  console.log(`results: ${resultFile}`);
 }
 
 main().catch((error) => {

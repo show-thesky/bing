@@ -1,0 +1,15 @@
+{
+  "id": "qwen4",
+  "model": "Qwen4-Max-Preview（阿里百炼 Token Plan，预览期）",
+  "match": ["qwen4"],
+  "status": "trial",
+  "levers": {
+    "refusalShape": true,
+    "boundaryNormalize": true,
+    "firstLine": true,
+    "fictionIntensity": true,
+    "personaHook": false
+  },
+  "scores": null,
+  "notes": "2026-11-14 接入。预览期 2026-11-11 10:00 ~ 2026-11-25 24:00（UTC+8），到期模型 ID 下线；只对 Token Plan 开放，端点 token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1。未测，故 status=trial，不进准入名单。已知歧义：match \"qwen4\" 与 qwen 档案的 \"qwen\" 会同时命中，matchProfile 会按「宁可不猜」回落默认，要自动识别需先定「更具体者优先」的规则。"
+}
